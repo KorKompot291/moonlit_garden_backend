@@ -1,56 +1,77 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from datetime import date, datetime
 
-from app.api.deps import CurrentUser, DBSession
-from app.schemas.lunar import (
-    LunarEnergyGetResponse,
-    LunarEnergyUseRequest,
-    LunarEnergyUseResponse,
-    LunarPhaseResponse,
-)
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.core.moon_phases import get_moon_phase_info
+from app.core.security import get_current_user
+from app.models.user import User
+from app.schemas.lunar import LunarEnergyOut, LunarEnergyUseRequest, LunarPhaseOut
 from app.services.lunar_service import (
-    get_or_create_energy_account,
-    get_today_lunar_phase,
-    lunar_phase_to_response,
+    apply_daily_bonus,
+    apply_lunar_energy_change,
+    get_lunar_energy,
 )
 
 router = APIRouter()
 
 
-@router.get("/today", response_model=LunarPhaseResponse, summary="Get today's moon phase")
-async def get_today_lunar(current_user: CurrentUser) -> LunarPhaseResponse:
-    info = await get_today_lunar_phase(current_user)
-    return lunar_phase_to_response(info, current_user)
+def _get_token_from_header(authorization: str | None = Header(default=None)) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Bearer token")
+    return authorization.removeprefix("Bearer ").strip()
 
 
-@router.get("/energy/get", response_model=LunarEnergyGetResponse, summary="Get moonlight balance")
-async def get_energy(db: DBSession, current_user: CurrentUser) -> LunarEnergyGetResponse:
-    account = await get_or_create_energy_account(db, current_user)
-    return LunarEnergyGetResponse(
-        balance=account.balance,
-        last_daily_bonus_date=account.last_daily_bonus_date,
+@router.get("/today", response_model=LunarPhaseOut, summary="Get today's moon phase and theme")
+async def get_today_phase() -> LunarPhaseOut:
+    now = datetime.utcnow()
+    info = get_moon_phase_info(now)
+    return LunarPhaseOut(
+        phase=info.phase,
+        energy_multiplier=info.energy_multiplier,
+        theme_id=info.theme_id,
     )
 
 
-@router.post("/energy/use", response_model=LunarEnergyUseResponse, summary="Spend moonlight")
+@router.get("/energy/get", response_model=LunarEnergyOut, summary="Get user lunar energy balance")
+async def get_energy(
+    db: AsyncSession = Depends(get_db),
+    token: str = Depends(_get_token_from_header),
+    user: User = Depends(get_current_user),
+) -> LunarEnergyOut:
+    return await get_lunar_energy(db, user.id)
+
+
+@router.post("/energy/use", response_model=LunarEnergyOut, summary="Use lunar energy")
 async def use_energy(
     payload: LunarEnergyUseRequest,
-    db: DBSession,
-    current_user: CurrentUser,
-) -> LunarEnergyUseResponse:
+    db: AsyncSession = Depends(get_db),
+    token: str = Depends(_get_token_from_header),
+    user: User = Depends(get_current_user),
+) -> LunarEnergyOut:
     if payload.amount <= 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Amount must be positive")
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+    # we simply subtract; if insufficient — error
+    current = await get_lunar_energy(db, user.id)
+    if current.balance < payload.amount:
+        raise HTTPException(status_code=400, detail="Not enough lunar energy")
 
-    account = await get_or_create_energy_account(db, current_user)
-    if account.balance < payload.amount:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Not enough moonlight",
-        )
+    acc = await apply_lunar_energy_change(db, user.id, -payload.amount)
+    return LunarEnergyOut(balance=acc.balance, last_daily_bonus_date=acc.last_daily_bonus_date)
 
-    account.balance -= payload.amount
-    await db.commit()
-    await db.refresh(account)
 
-    return LunarEnergyUseResponse(balance=account.balance, spent=payload.amount)
+@router.post("/energy/daily_bonus", response_model=LunarEnergyOut, summary="Claim daily moonlight bonus")
+async def claim_daily_bonus(
+    db: AsyncSession = Depends(get_db),
+    token: str = Depends(_get_token_from_header),
+    user: User = Depends(get_current_user),
+) -> LunarEnergyOut:
+    today = date.today()
+    applied, acc, _amount = await apply_daily_bonus(db, user.id, today)
+    if not applied:
+        # просто возвращаем текущий баланс
+        return LunarEnergyOut(balance=acc.balance, last_daily_bonus_date=acc.last_daily_bonus_date)
+    return LunarEnergyOut(balance=acc.balance, last_daily_bonus_date=acc.last_daily_bonus_date)

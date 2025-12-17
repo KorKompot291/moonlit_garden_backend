@@ -2,29 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 
-class PlantBase(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
+class PlantOut(BaseModel):
     id: int
-    species: str
-    stage: str
-    glow_level: int
-    is_wilted: bool
-    last_evolved_at: datetime | None
-    created_at: datetime
-    updated_at: datetime
-
-
-class GardenPlant(BaseModel):
-    id: int
+    user_id: int
     habit_id: int
-    habit_name: str
     species: str
-    stage: str
+    is_mushroom: bool
+    growth_stage: int
+    growth_points: int
     is_wilted: bool
-    glow_level: int
-    streak_current: int
-    streak_best: int
+    last_grown_at: datetime | None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

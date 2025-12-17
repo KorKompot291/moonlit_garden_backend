@@ -8,8 +8,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """
+    Global application settings, loaded from environment (.env).
+    """
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    # --- App basics ---
     APP_NAME: str = "Moonlit Garden Backend"
     APP_ENV: Literal["development", "staging", "production"] = "development"
     APP_DEBUG: bool = True
@@ -20,25 +25,37 @@ class Settings(BaseSettings):
     DEFAULT_TIMEZONE: str = "Asia/Phnom_Penh"
 
     TELEGRAM_WEBAPP_URL: Optional[AnyHttpUrl] = None
+
+    # CORS origins (comma-separated in .env)
     BACKEND_CORS_ORIGINS: list[AnyHttpUrl] = Field(default_factory=list)
 
-    DATABASE_URL: str = "postgresql+asyncpg://moonlit_user:moonlit_password@localhost:5432/moonlit_garden"
+    # --- Database ---
+    DATABASE_URL: str = (
+        "postgresql+asyncpg://moonlit_user:moonlit_password@localhost:5432/moonlit_garden"
+    )
 
     @property
     def SYNC_DATABASE_URL(self) -> str:
+        """
+        Synchronous URL for Alembic (psycopg2).
+        """
         if self.DATABASE_URL.startswith("postgresql+asyncpg://"):
             return self.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
         return self.DATABASE_URL
 
+    # --- Security / JWT ---
     JWT_SECRET_KEY: str = "CHANGE_ME_SUPER_SECRET_KEY"
     JWT_ALGORITHM: str = "HS256"
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
-    TELEGRAM_BOT_TOKEN: str = "CHANGE_ME_TELEGRAM_BOT_TOKEN"
+    # --- Telegram bot ---
+    TELEGRAM_BOT_TOKEN: str = "8492306440:AAEn5kOgqMCBbGwnUAvXe88odg0uBDY4bwY"
     TELEGRAM_ADMIN_CHAT_ID: Optional[int] = None
 
+    # --- Redis (optional) ---
     REDIS_URL: str = "redis://localhost:6379/0"
 
+    # --- Moon logic (can be tuned) ---
     MOON_PHASE_MULTIPLIERS: dict[str, float] = Field(
         default_factory=lambda: {
             "new": 0.9,

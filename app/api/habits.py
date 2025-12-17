@@ -1,106 +1,95 @@
 from __future__ import annotations
 
-from typing import List
+from datetime import date
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Header, status, Response
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, DBSession
-from app.schemas.habit import (
-    HabitBase,
-    HabitCheckinRequest,
-    HabitCheckinResponse,
-    HabitCreate,
-    HabitUpdate,
-)
+from app.core.database import get_db
+from app.core.security import get_current_user
+from app.models.user import User
+from app.schemas.habit import HabitCreate, HabitOut, HabitUpdate, HabitCheckInResponse
 from app.services.habit_service import (
-    checkin_habit,
-    create_habit,
+    check_in_habit,
+    create_habit_for_user,
     delete_habit,
-    list_habits,
+    get_habit_by_id,
+    get_user_habits,
     update_habit,
 )
-from app.services.lunar_service import get_or_create_energy_account, get_today_lunar_phase
 
 router = APIRouter()
 
 
-@router.get("/", response_model=List[HabitBase], summary="List habits")
-async def list_user_habits(db: DBSession, current_user: CurrentUser) -> List[HabitBase]:
-    habits = await list_habits(db, current_user)
-    return [HabitBase.model_validate(h) for h in habits]
+def _get_token_from_header(authorization: str | None = Header(default=None)) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Bearer token")
+    return authorization.removeprefix("Bearer ").strip()
 
 
-@router.post("/", response_model=HabitBase, status_code=status.HTTP_201_CREATED, summary="Create habit")
-async def create_user_habit(
-    payload: HabitCreate,
-    db: DBSession,
-    current_user: CurrentUser,
-) -> HabitBase:
-    habit = await create_habit(db, current_user, payload)
-    await db.commit()
-    await db.refresh(habit)
-    return HabitBase.model_validate(habit)
+@router.get("/", response_model=list[HabitOut], summary="List user habits")
+async def list_habits(
+    db: AsyncSession = Depends(get_db),
+    token: str = Depends(_get_token_from_header),
+    user: User = Depends(get_current_user),
+) -> list[HabitOut]:
+    habits = await get_user_habits(db, user.id)
+    return [HabitOut.model_validate(h) for h in habits]
 
 
-@router.patch("/{habit_id}", response_model=HabitBase, summary="Update habit")
-async def update_user_habit(
+@router.post("/", response_model=HabitOut, status_code=status.HTTP_201_CREATED, summary="Create habit")
+async def create_habit(
+    habit_in: HabitCreate,
+    db: AsyncSession = Depends(get_db),
+    token: str = Depends(_get_token_from_header),
+    user: User = Depends(get_current_user),
+) -> HabitOut:
+    habit = await create_habit_for_user(db, user.id, habit_in)
+    return HabitOut.model_validate(habit)
+
+
+@router.put("/{habit_id}", response_model=HabitOut, summary="Update habit")
+async def update_habit_endpoint(
     habit_id: int,
-    payload: HabitUpdate,
-    db: DBSession,
-    current_user: CurrentUser,
-) -> HabitBase:
-    try:
-        habit = await update_habit(db, current_user, habit_id, payload)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Habit not found")
+    habit_in: HabitUpdate,
+    db: AsyncSession = Depends(get_db),
+    token: str = Depends(_get_token_from_header),
+    user: User = Depends(get_current_user),
+) -> HabitOut:
+    habit = await get_habit_by_id(db, user.id, habit_id)
+    if not habit:
+        raise HTTPException(status_code=404, detail="Habit not found")
 
-    await db.commit()
-    await db.refresh(habit)
-    return HabitBase.model_validate(habit)
+    habit = await update_habit(db, habit, habit_in)
+    return HabitOut.model_validate(habit)
 
 
-@router.delete(
-    "/{habit_id}",
-    status_code=status.HTTP_200_OK,   # ⬅ был 204, ставим 200
-    summary="Delete habit",
-)
-async def delete_user_habit(
+@router.delete("/{habit_id}", response_class=Response, summary="Delete habit")
+async def delete_habit_endpoint(
     habit_id: int,
-    db: DBSession,
-    current_user: CurrentUser,
-) -> dict:
-    await delete_habit(db, current_user, habit_id)
-    await db.commit()
-    # Возвращаем простой JSON, без тела на 204
-    return {"status": "deleted"}
+    db: AsyncSession = Depends(get_db),
+    token: str = Depends(_get_token_from_header),
+    user: User = Depends(get_current_user),
+) -> Response:
+    habit = await get_habit_by_id(db, user.id, habit_id)
+    if not habit:
+        raise HTTPException(status_code=404, detail="Habit not found")
+    await delete_habit(db, habit)
+    # 204: no content
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/{habit_id}/checkin", response_model=HabitCheckinResponse, summary="Complete today's habit")
-async def checkin_user_habit(
+@router.post("/{habit_id}/checkin", response_model=HabitCheckInResponse, summary="Daily check-in")
+async def checkin_habit_endpoint(
     habit_id: int,
-    payload: HabitCheckinRequest,
-    db: DBSession,
-    current_user: CurrentUser,
-) -> HabitCheckinResponse:
-    try:
-        habit, plant, gained = await checkin_habit(db, current_user, habit_id, payload.force_cleansing)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Habit not found")
-    except RuntimeError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    db: AsyncSession = Depends(get_db),
+#  token: str = Depends(_get_token_from_header),
+#    user: User = Depends(get_current_user),
+) -> HabitCheckInResponse:
+    habit = await get_habit_by_id(db, user.id, habit_id)
+    if not habit:
+        raise HTTPException(status_code=404, detail="Habit not found")
 
-    account = await get_or_create_energy_account(db, current_user)
-    phase_info = await get_today_lunar_phase(current_user)
-
-    await db.commit()
-    await db.refresh(habit)
-    await db.refresh(account)
-
-    return HabitCheckinResponse(
-        habit=HabitBase.model_validate(habit),
-        plant_stage=plant.stage,
-        gained_moonlight=gained,
-        total_moonlight=account.balance,
-        moon_phase=phase_info.phase,
-        energy_multiplier=phase_info.energy_multiplier,
-    )
+    today = date.today()
+    result = await check_in_habit(db, habit, today)
+    return result

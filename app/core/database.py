@@ -2,35 +2,36 @@ from __future__ import annotations
 
 from typing import AsyncGenerator
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase, declared_attr
-
-from app.core.config import settings
-
-
-class Base(DeclarativeBase):
-    @declared_attr.directive
-    def __tablename__(cls) -> str:  # type: ignore[override]
-        return cls.__name__.lower()
-
-
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=settings.APP_DEBUG,
-    future=True,
-    pool_pre_ping=True,
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
 )
+from sqlalchemy.orm import declarative_base
+
+from .config import settings
+
+Base = declarative_base()
+
+
+def get_engine() -> AsyncEngine:
+    return create_async_engine(settings.DATABASE_URL, echo=False, future=True)
+
+
+engine: AsyncEngine = get_engine()
 
 AsyncSessionLocal = async_sessionmaker(
     engine,
-    class_=AsyncSession,
     expire_on_commit=False,
+    autoflush=False,
+    autocommit=False,
 )
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """
+    FastAPI dependency: provide an async DB session.
+    """
     async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
+        yield session

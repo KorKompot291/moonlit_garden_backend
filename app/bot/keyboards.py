@@ -1,4 +1,3 @@
-# FILE: moonlit_garden_backend/app/bot/keyboards.py
 from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
@@ -6,32 +5,17 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from app.core.config import settings
 
 
-def start_keyboard() -> InlineKeyboardMarkup:
+def main_menu_kb() -> InlineKeyboardMarkup:
     """
-    Стартовая клавиатура:
-    - Кнопка WebApp с подписью на русском и английском
-    - Кнопка "о проекте" тоже двуязычная
+    Main menu with WebApp button.
     """
-    buttons: list[list[InlineKeyboardButton]] = []
+    if not settings.TELEGRAM_WEBAPP_URL:
+        url = "https://moonlit-garden-frontend.vercel.app"  # fallback
+    else:
+        url = str(settings.TELEGRAM_WEBAPP_URL)
 
-    if settings.TELEGRAM_WEBAPP_URL:
-        # Можно прокинуть язык как query-параметр ?lang=ru|en, если фронтенд будет это учитывать.
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    text="🌙 Открыть Moonlit Garden / Open Moonlit Garden",
-                    web_app=WebAppInfo(url=str(settings.TELEGRAM_WEBAPP_URL)),
-                )
-            ]
-        )
-
-    buttons.append(
-        [
-            InlineKeyboardButton(
-                text="ℹ️ О проекте / About",
-                callback_data="about_project",
-            )
-        ]
+    webapp_button = InlineKeyboardButton(
+        text="Открыть Лунный сад 🌙",
+        web_app=WebAppInfo(url=url),
     )
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    return InlineKeyboardMarkup(inline_keyboard=[[webapp_button]])

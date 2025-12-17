@@ -1,108 +1,89 @@
 from __future__ import annotations
 
 import random
-from typing import Iterable, List, Tuple
+from datetime import datetime
+from typing import Sequence
 
-from sqlalchemy import Select, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.moon_phases import MoonPhaseInfo
-from app.models.artifact import ARTIFACT_RARITY_CHOICES, ArtifactDefinition, UserArtifact
-from app.models.user import User
+from app.core.moon_phases import get_moon_phase
+from app.models.artifact import ArtifactDefinition, ArtifactRarity, UserArtifact
+from app.schemas.artifact import ArtifactDefinitionOut, ArtifactDiscoverResponse
 
 
-def _rarity_weights_for_phase(phase: str) -> dict[str, float]:
-    base = {
-        "common": 70.0,
-        "rare": 25.0,
-        "legendary": 4.0,
-        "mythic": 1.0,
-    }
-    if phase == "full":
-        base["rare"] *= 1.4
-        base["legendary"] *= 2.0
-        base["mythic"] *= 2.5
-        base["common"] *= 0.7
-    elif phase == "new":
-        base["common"] *= 1.2
-        base["rare"] *= 0.9
-        base["legendary"] *= 0.7
-        base["mythic"] *= 0.5
-    elif phase == "waxing":
-        base["rare"] *= 1.2
-        base["legendary"] *= 1.1
-    elif phase == "waning":
-        base["rare"] *= 0.9
-        base["legendary"] *= 0.9
-    return base
+RARITY_BASE_WEIGHTS = {
+    ArtifactRarity.COMMON: 70,
+    ArtifactRarity.RARE: 25,
+    ArtifactRarity.EPIC: 4,
+    ArtifactRarity.LEGENDARY: 1,
+}
 
 
-def _filter_by_unlock_condition(
-    defs: Iterable[ArtifactDefinition], user: User, phase_info: MoonPhaseInfo
-) -> list[ArtifactDefinition]:
-    filtered: list[ArtifactDefinition] = []
-    for d in defs:
-        cond = d.unlock_condition or "none"
-        if cond == "none":
-            filtered.append(d)
-        elif cond == "full_moon_only" and phase_info.phase == "full":
-            filtered.append(d)
-        elif cond == "waxing_only" and phase_info.phase == "waxing":
-            filtered.append(d)
-        elif cond == "new_moon_only" and phase_info.phase == "new":
-            filtered.append(d)
-        elif cond == "waning_only" and phase_info.phase == "waning":
-            filtered.append(d)
-    return filtered
+def _get_phase_weight_multiplier(phase: str, artifact: ArtifactDefinition) -> float:
+    mul = 1.0
+    if artifact.preferred_phase and artifact.preferred_phase == phase:
+        mul *= 2.0
+    if phase == "full" and artifact.rarity in (ArtifactRarity.EPIC, ArtifactRarity.LEGENDARY):
+        mul *= 1.5
+    if phase == "new" and artifact.rarity == ArtifactRarity.COMMON:
+        mul *= 1.2
+    return mul
 
 
-def _weighted_choice(defs: list[ArtifactDefinition], weights: dict[str, float]) -> ArtifactDefinition:
-    population = defs
-    w = [weights.get(d.rarity, 1.0) for d in defs]
-    total = sum(w)
-    if not population or total <= 0:
-        return random.choice(defs)
-    r = random.uniform(0, total)
-    cum = 0.0
-    for d, weight in zip(population, w):
-        cum += weight
-        if r <= cum:
-            return d
-    return population[-1]
-
-
-async def list_user_artifacts(db: AsyncSession, user: User) -> list[Tuple[UserArtifact, ArtifactDefinition]]:
-    stmt: Select = (
-        select(UserArtifact, ArtifactDefinition)
-        .join(ArtifactDefinition, UserArtifact.artifact_definition_id == ArtifactDefinition.id)
-        .where(UserArtifact.user_id == user.id)
-        .order_by(UserArtifact.acquired_at.desc())
+async def get_user_artifacts(db: AsyncSession, user_id: int) -> Sequence[UserArtifact]:
+    result = await db.execute(
+        select(UserArtifact).where(UserArtifact.user_id == user_id).order_by(UserArtifact.acquired_at)
     )
-    result = await db.execute(stmt)
-    rows = result.all()
-    return [(row[0], row[1]) for row in rows]
+    return result.scalars().all()
 
 
 async def discover_artifact(
-    db: AsyncSession, user: User, phase_info: MoonPhaseInfo
-) -> Tuple[UserArtifact, ArtifactDefinition]:
-    defs_result = await db.execute(select(ArtifactDefinition))
-    all_defs: List[ArtifactDefinition] = list(defs_result.scalars())
+    db: AsyncSession,
+    user_id: int,
+) -> ArtifactDiscoverResponse:
+    result = await db.execute(select(ArtifactDefinition))
+    all_defs = result.scalars().all()
     if not all_defs:
-        raise RuntimeError("No artifact definitions are configured")
+        return ArtifactDiscoverResponse(
+            acquired=False,
+            artifact=None,
+            reason="No artifacts defined yet.",
+        )
 
-    owned_stmt = select(UserArtifact.artifact_definition_id).where(UserArtifact.user_id == user.id)
-    owned_result = await db.execute(owned_stmt)
-    owned_ids = {row[0] for row in owned_result.all()}
+    now = datetime.utcnow()
+    phase = get_moon_phase(now)
 
-    available = [d for d in all_defs if d.id not in owned_ids] or all_defs
+    weights = []
+    for d in all_defs:
+        base = RARITY_BASE_WEIGHTS.get(d.rarity, 1)
+        w = base * _get_phase_weight_multiplier(phase, d)
+        weights.append(w)
 
-    available = _filter_by_unlock_condition(available, user, phase_info) or available
+    chosen = random.choices(all_defs, weights=weights, k=1)[0]
 
-    weights = _rarity_weights_for_phase(phase_info.phase)
-    chosen_def = _weighted_choice(available, weights)
+    result = await db.execute(
+        select(UserArtifact).where(
+            UserArtifact.user_id == user_id,
+            UserArtifact.artifact_definition_id == chosen.id,
+        )
+    )
+    existing = result.scalar_one_or_none()
+    if existing:
+        return ArtifactDiscoverResponse(
+            acquired=False,
+            artifact=ArtifactDefinitionOut.model_validate(chosen),
+            reason="Already owned.",
+        )
 
-    ua = UserArtifact(user_id=user.id, artifact_definition_id=chosen_def.id)
+    ua = UserArtifact(user_id=user_id, artifact_definition_id=chosen.id)
     db.add(ua)
-    await db.flush()
-    return ua, chosen_def
+    await db.commit()
+    await db.refresh(ua)
+    await db.refresh(chosen)
+
+    return ArtifactDiscoverResponse(
+        acquired=True,
+        artifact=ArtifactDefinitionOut.model_validate(chosen),
+        reason="New artifact discovered!",
+    )

@@ -1,37 +1,40 @@
 from __future__ import annotations
 
-from typing import List
+from typing import Any, Dict, List
 
-from sqlalchemy import Select, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.moon_phases import get_moon_phase_info
 from app.models.habit import Habit
 from app.models.plant import Plant
-from app.models.user import User
-from app.schemas.plant import GardenPlant
+from app.schemas.plant import PlantOut
 
 
-async def get_garden_state(db: AsyncSession, user: User) -> List[GardenPlant]:
-    stmt: Select = (
-        select(Plant, Habit)
-        .join(Habit, Plant.habit_id == Habit.id)
-        .where(Plant.user_id == user.id, Habit.is_active.is_(True))
-        .order_by(Habit.created_at.asc())
-    )
-    result = await db.execute(stmt)
-    items: list[GardenPlant] = []
-    for plant, habit in result.all():
-        items.append(
-            GardenPlant(
-                id=plant.id,
-                habit_id=habit.id,
-                habit_name=habit.name,
-                species=plant.species,
-                stage=plant.stage,
-                is_wilted=plant.is_wilted,
-                glow_level=plant.glow_level,
-                streak_current=habit.streak_current,
-                streak_best=habit.streak_best,
-            )
-        )
-    return items
+async def get_garden_state(db: AsyncSession, user_id: int) -> Dict[str, Any]:
+    """
+    Return full garden state for user:
+    - plants
+    - phases
+    - aggregated stats
+    """
+    result = await db.execute(select(Plant).where(Plant.user_id == user_id))
+    plants = result.scalars().all()
+
+    plant_out: List[PlantOut] = [PlantOut.model_validate(p) for p in plants]
+
+    # active habits count
+    result = await db.execute(select(Habit).where(Habit.user_id == user_id, Habit.is_active == True))  # noqa: E712
+    active_habits_count = len(result.scalars().all())
+
+    phase_info = get_moon_phase_info(None)
+
+    return {
+        "plants": [p.model_dump() for p in plant_out],
+        "activeHabits": active_habits_count,
+        "moon": {
+            "phase": phase_info.phase,
+            "themeId": phase_info.theme_id,
+            "energyMultiplier": phase_info.energy_multiplier,
+        },
+    }

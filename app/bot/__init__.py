@@ -1,1 +1,3 @@
-from __future__ import annotations
+"""
+Telegram bot package for Moonlit Garden.
+"""

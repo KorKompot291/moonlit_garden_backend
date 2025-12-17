@@ -2,22 +2,21 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer
+from sqlalchemy.orm import relationship
 
 from app.core.database import Base
 
 
 class LunarEnergyAccount(Base):
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("user.id", ondelete="CASCADE"), unique=True, nullable=False)
+    __tablename__ = "lunarenergyaccount"
 
-    balance: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("user.id", ondelete="CASCADE"), unique=True, nullable=False)
 
-    last_daily_bonus_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    balance = Column(Integer, nullable=False, default=0)
 
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    last_daily_bonus_date = Column(Date, nullable=True)
 
-    user: Mapped["User"] = relationship(back_populates="lunar_energy_account")
+    user = relationship("User", back_populates="lunar_energy_account")

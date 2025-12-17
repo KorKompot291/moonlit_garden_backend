@@ -1,42 +1,36 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List
+from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
+
+from app.models.artifact import ArtifactRarity
 
 
-class ArtifactDefinitionBase(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
+class ArtifactDefinitionOut(BaseModel):
     id: int
     code: str
     name: str
-    description: str
-    rarity: str
-    kind: str
-    unlock_condition: str
+    description: Optional[str]
+    rarity: ArtifactRarity
+    preferred_phase: Optional[str]
+
+    class Config:
+        from_attributes = True
 
 
-class UserArtifactBase(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
+class UserArtifactOut(BaseModel):
     id: int
-    artifact_definition_id: int
+    artifact_definition: ArtifactDefinitionOut
     acquired_at: datetime
-    is_favorite: bool
-    is_displayed: bool
+    is_equipped: bool
 
-
-class ArtifactWithDefinition(BaseModel):
-    artifact: UserArtifactBase
-    definition: ArtifactDefinitionBase
-
-
-class ArtifactListResponse(BaseModel):
-    artifacts: List[ArtifactWithDefinition]
+    class Config:
+        from_attributes = True
 
 
 class ArtifactDiscoverResponse(BaseModel):
-    discovered: ArtifactWithDefinition
-    remaining_moonlight: int
+    acquired: bool
+    artifact: Optional[ArtifactDefinitionOut]
+    reason: str

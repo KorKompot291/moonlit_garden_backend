@@ -1,56 +1,65 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Any, Dict
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import create_access_token, verify_telegram_webapp_init_data
-from app.models.lunar_energy import LunarEnergyAccount
 from app.models.user import User
-from app.schemas.user import TelegramAuthResponse, TelegramWebAppInitRequest, Token, UserMe
+from app.schemas.user import UserOut
 
 router = APIRouter()
 
 
-@router.post("/telegram/webapp-init", response_model=TelegramAuthResponse, summary="Login via Telegram WebApp")
-async def telegram_webapp_init(
-    payload: TelegramWebAppInitRequest,
+class WebAppInitData(BaseModel):
+    init_data: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+
+@router.post("/telegram/webapp", response_model=TokenResponse, summary="Verify Telegram WebApp and issue JWT")
+async def auth_telegram_webapp(
+    payload: WebAppInitData,
     db: AsyncSession = Depends(get_db),
-) -> TelegramAuthResponse:
-    init_data = payload.init_data
+) -> Any:
+    """
+    Accepts `init_data` from Telegram WebApp, verifies it, creates/gets user,
+    and returns JWT access token to be used by frontend.
+    """
+    data: Dict[str, Any] = verify_telegram_webapp_init_data(payload.init_data)
+    user_payload = data.get("user")
+    if not user_payload:
+        raise HTTPException(status_code=400, detail="Missing user in init data")
 
-    if not verify_telegram_webapp_init_data(init_data):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Telegram init data")
-
-    user_data = init_data.get("user") or {}
-    telegram_id = user_data.get("id")
+    telegram_id = user_payload.get("id")
     if not telegram_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing Telegram user data")
+        raise HTTPException(status_code=400, detail="Missing Telegram id")
 
-    stmt = select(User).where(User.telegram_id == telegram_id)
-    result = await db.execute(stmt)
+    result = await db.execute(select(User).where(User.telegram_id == telegram_id))
     user = result.scalar_one_or_none()
 
-    if user is None:
+    if not user:
         user = User(
             telegram_id=telegram_id,
-            username=user_data.get("username"),
-            first_name=user_data.get("first_name"),
-            last_name=user_data.get("last_name"),
-            timezone=settings.DEFAULT_TIMEZONE,
+            username=user_payload.get("username"),
+            first_name=user_payload.get("first_name"),
+            last_name=user_payload.get("last_name"),
+            timezone="UTC",
         )
         db.add(user)
-        await db.flush()
+        await db.commit()
+        await db.refresh(user)
 
-        account = LunarEnergyAccount(user_id=user.id, balance=0)
-        db.add(account)
-        await db.flush()
-
-    token_str = create_access_token(subject=user.id)
-    token = Token(access_token=token_str)
-
-    user_me = UserMe.model_validate(user)
-
-    return TelegramAuthResponse(token=token, user=user_me)
+    token = create_access_token(subject=user.id, extra={"tg_id": user.telegram_id})
+    return TokenResponse(
+        access_token=token,
+        user=UserOut.model_validate(user),
+    )

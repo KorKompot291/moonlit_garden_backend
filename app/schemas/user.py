@@ -3,35 +3,24 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 
 class UserBase(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
     telegram_id: int
     username: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    timezone: str
-    created_at: datetime
-    updated_at: datetime
+    timezone: str | None = None
 
 
-class UserMe(UserBase):
+class UserCreate(UserBase):
     pass
 
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
+class UserOut(UserBase):
+    id: int
+    created_at: datetime
 
-
-class TelegramWebAppInitRequest(BaseModel):
-    init_data: dict
-
-
-class TelegramAuthResponse(BaseModel):
-    token: Token
-    user: UserMe
+    class Config:
+        from_attributes = True

@@ -1,57 +1,69 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Enum as SAEnum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import relationship
 
 from app.core.database import Base
 
-ARTIFACT_RARITY_CHOICES = ("common", "rare", "legendary", "mythic")
+
+class ArtifactRarity(str, Enum):
+    COMMON = "common"
+    RARE = "rare"
+    EPIC = "epic"
+    LEGENDARY = "legendary"
 
 
 class ArtifactDefinition(Base):
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    """
+    Master table for artifacts / achievements.
+    """
 
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
+    __tablename__ = "artifactdefinition"
 
-    rarity: Mapped[str] = mapped_column(
-        Enum(*ARTIFACT_RARITY_CHOICES, name="artifact_rarity_enum"),
-        nullable=False,
-        default="common",
-    )
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(64), unique=True, index=True, nullable=False)
+    name = Column(String(128), nullable=False)
+    description = Column(Text, nullable=True)
 
-    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="crystal")
+    rarity = Column(SAEnum(ArtifactRarity, name="artifact_rarity_enum"), nullable=False)
 
-    unlock_condition: Mapped[str] = mapped_column(String(64), nullable=False, default="none")
+    # Optional: some artifacts can be tied to moon phase preferences
+    preferred_phase = Column(String(16), nullable=True)  # "new", "full", etc.
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-    user_artifacts: Mapped[list["UserArtifact"]] = relationship(back_populates="artifact_definition")
+    user_artifacts = relationship("UserArtifact", back_populates="artifact_definition")
 
 
 class UserArtifact(Base):
-    __table_args__ = (
-        UniqueConstraint("user_id", "artifact_definition_id", name="uq_user_artifact_unique"),
-    )
+    """
+    Owned artifacts by user.
+    """
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
-    artifact_definition_id: Mapped[int] = mapped_column(
+    __tablename__ = "userartifact"
+    __table_args__ = (UniqueConstraint("user_id", "artifact_definition_id", name="uq_user_artifact_single"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("user.id", ondelete="CASCADE"), index=True, nullable=False)
+    artifact_definition_id = Column(
+        Integer,
         ForeignKey("artifactdefinition.id", ondelete="CASCADE"),
-        nullable=False,
         index=True,
+        nullable=False,
     )
 
-    acquired_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    is_favorite: Mapped[bool] = mapped_column(default=False, nullable=False)
-    is_displayed: Mapped[bool] = mapped_column(default=False, nullable=False)
+    acquired_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    is_equipped = Column(Integer, nullable=False, default=False)
 
-    user: Mapped["User"] = relationship(back_populates="artifacts")
-    artifact_definition: Mapped["ArtifactDefinition"] = relationship(back_populates="user_artifacts")
+    user = relationship("User", back_populates="artifacts")
+    artifact_definition = relationship("ArtifactDefinition", back_populates="user_artifacts")

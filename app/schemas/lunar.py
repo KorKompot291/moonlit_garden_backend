@@ -1,30 +1,24 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
+MoonPhase = Literal["new", "waxing", "full", "waning"]
 
-class LunarPhaseResponse(BaseModel):
-    phase: str
-    age_days: float
-    illumination: float
+
+class LunarPhaseOut(BaseModel):
+    phase: MoonPhase
     energy_multiplier: float
-    visual_theme_id: str
-    local_date: date
-    timezone: str
+    theme_id: str
 
 
-class LunarEnergyGetResponse(BaseModel):
+class LunarEnergyOut(BaseModel):
     balance: int
-    last_daily_bonus_date: date | None
+    last_daily_bonus_date: Optional[date]
 
 
 class LunarEnergyUseRequest(BaseModel):
     amount: int
-    reason: str | None = None
-
-
-class LunarEnergyUseResponse(BaseModel):
-    balance: int
-    spent: int
+    reason: str
